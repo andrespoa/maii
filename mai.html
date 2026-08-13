@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Galaxia Nebulosa - Núcleo con TE AMO</title>
+<style>
+  html, body { margin:0; height:100%; background:#000; overflow:hidden; }
+  canvas { display:block; }
+
+  /* Estilos del reproductor y overlay */
+  .player{
+    position:fixed;
+    left:50%;
+    top:50%;
+    transform:translate(-50%,-50%);
+    z-index:20;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:10px;
+    pointer-events:none;
+  }
+  #play{
+    --size:80px;
+    width:var(--size);
+    height:var(--size);
+    border-radius:999px;
+    border:2px solid rgba(255,255,255,0.12);
+    background:radial-gradient(circle at 30% 30%, #ff7ab6 0%, #ff4d6d 40%, #ff2c2c 100%);
+    color:#fff;
+    font-size:22px;
+    font-weight:700;
+    box-shadow:0 6px 30px rgba(255,40,90,0.25), inset 0 2px 6px rgba(255,255,255,0.06);
+    backdrop-filter: blur(4px);
+    cursor:pointer;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    text-shadow:0 2px 6px rgba(0,0,0,0.4);
+    transition:transform .18s ease, box-shadow .18s ease;
+    animation: heartbeat 2.8s ease-in-out infinite;
+    pointer-events:auto; /* permitir eventos solo en el botón */
+  }
+  @keyframes heartbeat{
+    0%{ transform: scale(1); }
+    20%{ transform: scale(1.08); }
+    40%{ transform: scale(1); }
+    60%{ transform: scale(1.05); }
+    100%{ transform: scale(1); }
+  }
+  #play:hover{ transform: translateY(-6px) scale(1.04); box-shadow:0 10px 40px rgba(255,40,90,0.35); animation-play-state:paused; }
+  #play:active{ transform: translateY(-2px) scale(0.98); }
+  .player .hint{ color: #ffd6e6; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; font-size:14px; text-align:center; text-shadow:0 1px 2px rgba(0,0,0,0.6); }
+
+  /* Overlay de video */
+  .video-overlay{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,0.28); backdrop-filter: blur(6px); z-index:40; }
+  .video-overlay.hidden{ display:none; }
+  .video-container{ width:min(95vw,1100px); max-height:95vh; position:relative; }
+  .video-container video{ width:100%; height:auto; max-height:95vh; object-fit:contain; border-radius:12px; box-shadow:0 30px 120px rgba(0,0,0,0.55); display:block; }
+  .close-btn{ position:absolute; right:-10px; top:-10px; background:linear-gradient(180deg,#ffffff,#ff9ab1); border-radius:999px; width:46px; height:46px; border:none; font-size:20px; cursor:pointer; box-shadow:0 8px 30px rgba(0,0,0,0.45); }
+
+  /* Pequeño ajuste para dispositivos móviles */
+  @media (max-width:600px){
+    #play{ --size:84px; font-size:16px; }
+    .player .hint{ font-size:12px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<!-- Elemento de video (se usa dentro del overlay) -->
+<video id="mai-video" src="mai.mp4" preload="metadata" style="display:none"></video>
+
+<!-- Reproductor personalizado (botón centrado sobre la galaxia) -->
+<div class="player" id="player">
+  <button id="play" aria-label="Reproducir video">❤</button>
+  <div class="hint">Pulsa el corazón para ver algo especial</div>
+</div>
+
+<!-- Overlay con el video -->
+<div id="video-overlay" class="video-overlay hidden" aria-hidden="true">
+  <div class="video-container" role="dialog" aria-modal="true">
+    <button id="close-video" class="close-btn" aria-label="Cerrar">✕</button>
+    <video id="overlay-video" src="mai.mp4" controls playsinline></video>
+  </div>
+</div>
+
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.148.0/build/three.min.js"></script>
+<script>
+// ================= Escena =================
+const canvas=document.getElementById('c');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+renderer.setSize(innerWidth,innerHeight);
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,0.1,5000);
+let targetDist=300,currentDist=300,rotX=0.2,rotY=0;
+
+// Fondo
+const loader=new THREE.TextureLoader();
+const nebulaTex=loader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/cube/space/px.jpg');
+scene.background=nebulaTex;
+
+// Estrellas
+(function makeStars(count=2000,spread=3000){
+  const g=new THREE.BufferGeometry();
+  const pos=new Float32Array(count*3);
+  for(let i=0;i<count;i++){
+    const r=spread*(0.3+Math.random()*0.7);
+    const th=Math.random()*Math.PI*2;
+    const ph=Math.acos(2*Math.random()-1);
+    pos[i*3+0]=r*Math.sin(ph)*Math.cos(th);
+    pos[i*3+1]=r*Math.cos(ph);
+    pos[i*3+2]=r*Math.sin(ph)*Math.sin(th);
+  }
+  g.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  scene.add(new THREE.Points(g,new THREE.PointsMaterial({size:1.5,color:0xffffff,depthWrite:false})));
+})();
+
+// Galaxia espiral central en lugar del núcleo
+const galaxyGroup=new THREE.Group();
+scene.add(galaxyGroup);
+function generateGalaxy(){
+  const parameters={
+    count:50000,
+    size:0.02,
+    radius:100,
+    branches:2,
+    spin:0.4,
+    randomness:0.2,
+    randomnessPower:3,
+    insideColor:'#ffffff',
+    outsideColor:'#ffffff'
+  };
+  const geometry=new THREE.BufferGeometry();
+  const positions=new Float32Array(parameters.count*3);
+  for(let i=0;i<parameters.count;i++){
+    const i3=i*3;
+    const radius=Math.random()*parameters.radius;
+    const spinAngle=radius*parameters.spin;
+    const branchAngle=(i%parameters.branches)/parameters.branches*Math.PI*2;
+    const randomX=Math.pow(Math.random(),parameters.randomnessPower)*(Math.random()<0.5?1:-1)*parameters.randomness*radius;
+    const randomY=Math.pow(Math.random(),parameters.randomnessPower)*(Math.random()<0.5?1:-1)*parameters.randomness*radius;
+    const randomZ=Math.pow(Math.random(),parameters.randomnessPower)*(Math.random()<0.5?1:-1)*parameters.randomness*radius;
+    positions[i3]=Math.cos(branchAngle+spinAngle)*radius+randomX;
+    positions[i3+1]=randomY;
+    positions[i3+2]=Math.sin(branchAngle+spinAngle)*radius+randomZ;
+  }
+  geometry.setAttribute('position',new THREE.BufferAttribute(positions,3));
+  const material=new THREE.PointsMaterial({
+    size:parameters.size,
+    sizeAttenuation:true,
+    depthWrite:false,
+    blending:THREE.AdditiveBlending,
+    color:parameters.insideColor
+  });
+  const points=new THREE.Points(geometry,material);
+  galaxyGroup.add(points);
+}
+generateGalaxy();
+
+// Glow blanco
+function makeGlow(size=768,c1='255,255,255',c2='200,200,255'){
+  const c=document.createElement('canvas');c.width=c.height=size;
+  const g=c.getContext('2d');
+  const grad=g.createRadialGradient(size/2,size/2,size*0.05,size/2,size/2,size*0.5);
+  grad.addColorStop(0,'rgba('+c1+',0.4)');
+  grad.addColorStop(0.5,'rgba('+c2+',0.15)');
+  grad.addColorStop(1,'rgba(0,0,0,0)');
+  g.fillStyle=grad;g.fillRect(0,0,size,size);
+  return new THREE.CanvasTexture(c);
+}
+const glow=new THREE.Sprite(new THREE.SpriteMaterial({map:makeGlow(),transparent:true,depthWrite:false}));
+glow.scale.set(500,500,1);
+scene.add(glow);
+
+
+
+// Palabras alrededor
+const WORDS=[];
+const baseWords=[
+  '💖 Mailove','🌞 tonota','🌎 Mi mundo','✨ estrellita','❤️ ilov','🌌 maiworld',
+  '👑 preciosa','🌠 Estrella','💫 cariñe','🔥 te sexi','🎶 Tu risa','🦋 maivii',
+  '💎 Eres todo','🙏 tenkiuu','💕 Cariño','🌹 Mi amor','🤗 Abrazos','🌸 kiu',
+  '🌈 ¿lgbt?','🌟 only you','🧸ñiñu ','🎁 ','🌙 ','💌 carepipi',
+  '🪐 Mi preciosa','🌊 ','💡 ','🍒 preciosota','🥰 Mi vida',
+  '🎇 Mi felicidad','🌻 Mi alegría','🌺 Mi chiqis','💜 mi noviecita','🌟 Dormilona','✨',
+  '🎵 ','🔥 hooo ho','⭐ Mi estrella','🌈 ¿lgbt?',
+  '💫 mi esposaaa','🌷 Siempre juntos','🎀 Mailove','🍀 Maii','🪞 te quieroo'
+];
+for(let i=0;i<6;i++){WORDS.push(...baseWords);}
+function makeTextTexture(text,color){
+  const c=document.createElement('canvas');c.width=512;c.height=128;
+  const ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);
+  ctx.font='bold 60px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillStyle='#fff';ctx.shadowColor=color;ctx.shadowBlur=30;
+  ctx.fillText(text,c.width/2,c.height/2);
+  return new THREE.CanvasTexture(c);
+}
+const COLORS=['#ff66ff','#66ccff','#ffd36b','#ffffff','#8df59a','#ffa0f8','#c6a7ff','#ffffff','#44ff99','#99ccff'];
+const textGroup=new THREE.Group();scene.add(textGroup);
+for(let i=0;i<WORDS.length;i++){
+  const tex=makeTextTexture(WORDS[i],COLORS[i%COLORS.length]);
+  const mat=new THREE.SpriteMaterial({map:tex,transparent:true});
+  const sp=new THREE.Sprite(mat);
+  sp.scale.set(50,16,1);
+  const phi=Math.acos(2*Math.random()-1);const theta=Math.random()*Math.PI*2;
+  const r=150+Math.random()*120;
+  sp.position.set(r*Math.sin(phi)*Math.cos(theta),r*Math.cos(phi),r*Math.sin(phi)*Math.sin(theta));
+  sp.userData={phi:phi,theta:theta,radius:r,speed:0.001+Math.random()*0.001};
+  textGroup.add(sp);
+}
+
+// Controles cámara
+let dragging=false,lastX=0,lastY=0;
+function onDown(e){dragging=true;const t=e.touches?e.touches[0]:e;lastX=t.clientX;lastY=t.clientY;}
+function onMove(e){if(!dragging)return;const t=e.touches?e.touches[0]:e;const dx=(t.clientX-lastX)/innerWidth;const dy=(t.clientY-lastY)/innerHeight;rotY-=dx*3;rotX=Math.max(-1.2,Math.min(1.2,rotX-dy*2.2));lastX=t.clientX;lastY=t.clientY;}
+function onUp(){dragging=false;}
+addEventListener('mousedown',onDown);addEventListener('mousemove',onMove);addEventListener('mouseup',onUp);
+addEventListener('touchstart',onDown,{passive:true});addEventListener('touchmove',onMove,{passive:true});addEventListener('touchend',onUp,{passive:true});
+addEventListener('wheel',(e)=>{targetDist+=e.deltaY*0.25;targetDist=Math.max(160,Math.min(600,targetDist));},{passive:true});
+
+// Zoom con pellizco en móviles
+let pinch=0;
+addEventListener('touchmove',(e)=>{
+  if(e.touches && e.touches.length===2){
+    e.preventDefault();
+    const dx=e.touches[0].clientX-e.touches[1].clientX;
+    const dy=e.touches[0].clientY-e.touches[1].clientY;
+    const d=Math.hypot(dx,dy);
+    if(pinch){targetDist+=(pinch-d)*0.5;targetDist=Math.max(160,Math.min(600,targetDist));}
+    pinch=d;
+  }
+},{passive:false});
+addEventListener('touchend',()=>{pinch=0;},{passive:true});
+
+// Animación
+let t=0;
+const _centerVec = new THREE.Vector3(0,0,0);
+const _offsetVec = new THREE.Vector3(50,0,0);
+let lastScreenCenter = { x: window.innerWidth/2, y: window.innerHeight/2 };
+const playerEl = document.getElementById('player');
+const playBtn = document.getElementById('play');
+const hintEl = document.querySelector('.player .hint');
+
+function tick(){
+  requestAnimationFrame(tick);
+  t+=0.01;
+  glow.scale.set(500*(1+Math.sin(t*0.4)*0.03),500*(1+Math.sin(t*0.4)*0.03),1);
+  galaxyGroup.rotation.y=t*0.5; // Rotación de la galaxia espiral
+  textGroup.children.forEach(sp=>{
+    sp.material.opacity=0.8+0.2*Math.sin(t*2);
+    sp.userData.theta+=sp.userData.speed;
+    sp.position.x=sp.userData.radius*Math.sin(sp.userData.phi)*Math.cos(sp.userData.theta);
+    sp.position.z=sp.userData.radius*Math.sin(sp.userData.phi)*Math.sin(sp.userData.theta);
+  });
+  currentDist+=(targetDist-currentDist)*0.06;
+  const cx=Math.cos(rotX), sxRot=Math.sin(rotX); const cy=Math.cos(rotY), sy=Math.sin(rotY);
+  camera.position.set(currentDist*sy*cx, currentDist*sxRot, currentDist*cy*cx);
+  camera.lookAt(0,0,0);
+
+  // Proyectar el centro del mundo (0,0,0) a coordenadas de pantalla para posicionar el botón
+  _centerVec.set(0,0,0).project(camera);
+  const canvasBounds = renderer.domElement.getBoundingClientRect();
+  const screenX = ( _centerVec.x + 1 ) / 2 * canvasBounds.width + canvasBounds.left;
+  const screenY = ( -_centerVec.y + 1 ) / 2 * canvasBounds.height + canvasBounds.top;
+  lastScreenCenter.x = screenX;
+  lastScreenCenter.y = screenY;
+  if(playerEl){
+    playerEl.style.left = screenX + 'px';
+    playerEl.style.top = screenY + 'px';
+    // Asegurar que el botón esté siempre encima
+    playerEl.style.zIndex = 30;
+  }
+
+  // Ajustar el tamaño del botón en píxeles según proyección de un punto de referencia
+  if(playBtn){
+    const projOffset = _offsetVec.clone().project(camera);
+    const screenOffsetX = (projOffset.x + 1) / 2 * canvasBounds.width + canvasBounds.left;
+    const screenOffsetY = (-projOffset.y + 1) / 2 * canvasBounds.height + canvasBounds.top;
+    const pdist = Math.hypot(screenOffsetX - screenX, screenOffsetY - screenY);
+    // Fijar tamaño pequeño y mostrar solo en zoom cercano
+    const FIXED_SIZE = 48; // píxeles
+    const ZOOM_SHOW_THRESHOLD = 220; // mostrar solo si currentDist <= este valor (más cerca -> más zoom)
+
+    const desiredSize = FIXED_SIZE;
+    playBtn.style.width = desiredSize + 'px';
+    playBtn.style.height = desiredSize + 'px';
+    playBtn.style.fontSize = Math.max(12, Math.round(desiredSize * 0.28)) + 'px';
+    playBtn.style.borderRadius = (desiredSize / 2) + 'px';
+
+    // Mostrar/ocultar según distancia: aparecer solo al hacer zoom (cerca)
+    if(currentDist > ZOOM_SHOW_THRESHOLD){
+      playBtn.style.opacity = '0';
+      playBtn.style.pointerEvents = 'none';
+      if(hintEl) hintEl.style.opacity = '0';
+    } else {
+      playBtn.style.opacity = '1';
+      playBtn.style.pointerEvents = 'auto';
+      if(hintEl) hintEl.style.opacity = '1';
+    }
+
+    // Pausar latido si está muy pequeño
+    playBtn.style.animationPlayState = 'paused';
+  }
+
+  renderer.render(scene,camera);
+}
+
+// --- Código: integración del botón y reproducción del video ---
+(function setupVideoUI(){
+  const overlay = document.getElementById('video-overlay');
+  const overlayVideo = document.getElementById('overlay-video');
+  const closeBtn = document.getElementById('close-video');
+  const canvasEl = renderer.domElement;
+
+  if(!playBtn || !overlay || !overlayVideo || !closeBtn || !canvasEl) return;
+
+  function openOverlay(){
+    overlay.classList.remove('hidden');
+    overlay.setAttribute('aria-hidden','false');
+    try{ overlayVideo.currentTime = 0; }catch(e){}
+    const p = overlayVideo.play();
+    if(p && p.catch) p.catch(()=>{});
+    const c = document.querySelector('.video-container');
+    if(c){ c.style.transform = 'scale(0.96)'; c.style.transition='transform .18s ease'; requestAnimationFrame(()=>{ c.style.transform='scale(1)'; }); }
+  }
+
+  function closeOverlay(){
+    overlayVideo.pause();
+    overlay.classList.add('hidden');
+    overlay.setAttribute('aria-hidden','true');
+    playBtn.focus();
+  }
+
+  // Exponer funciones globales por si se necesitan
+  window.openMaiOverlay = openOverlay;
+  window.closeMaiOverlay = closeOverlay;
+
+  playBtn.addEventListener('click', openOverlay);
+  closeBtn.addEventListener('click', closeOverlay);
+  window.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeOverlay(); });
+  overlay.addEventListener('click', (e)=>{ if(e.target === overlay) closeOverlay(); });
+  overlayVideo.addEventListener('ended', ()=>{ closeOverlay(); });
+
+  // Click/Tap cerca del centro del pixel art también reproduce
+  function handleCanvasClick(e){
+    const rect = canvasEl.getBoundingClientRect();
+    let cx = e.clientX, cy = e.clientY;
+    if(e.touches && e.touches[0]){ cx = e.touches[0].clientX; cy = e.touches[0].clientY; }
+    const dx = cx - lastScreenCenter.x;
+    const dy = cy - lastScreenCenter.y;
+    const dist = Math.hypot(dx,dy);
+    const btnRect = (playBtn && playBtn.getBoundingClientRect) ? playBtn.getBoundingClientRect() : null;
+    const threshold = btnRect ? Math.max(28, btnRect.width * 0.5) : Math.max(48, Math.min(120, Math.min(rect.width, rect.height) * 0.08));
+    if(dist <= threshold) openOverlay();
+  }
+  canvasEl.addEventListener('click', handleCanvasClick);
+  canvasEl.addEventListener('touchstart', handleCanvasClick, {passive:true});
+})();
+
+tick();
+</script>
+</body>
+</html>
